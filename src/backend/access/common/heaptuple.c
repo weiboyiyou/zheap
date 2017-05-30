@@ -1039,7 +1039,6 @@ slot_deform_tuple(TupleTableSlot *slot, int natts)
 	HeapTupleHeader tup;
 	ZHeapTupleHeader ztup;
 	bool		hasnulls;
-	Form_pg_attribute *att = tupleDesc->attrs;
 	int			attnum;
 	char	   *tp;				/* ptr to tuple data */
 	long		off;			/* offset in tuple data */
