@@ -430,6 +430,18 @@ static relopt_string stringRelOpts[] =
 		validateWithCheckOption,
 		NULL
 	},
+	{
+		{
+			"storage_engine",
+			"Underlying storage engine for this relation.",
+			RELOPT_KIND_HEAP,
+			AccessExclusiveLock
+		},
+		1,
+		true,
+		validateStorageEngine,
+		"heap"
+	},
 	/* list terminator */
 	{{NULL}}
 };
@@ -1362,7 +1374,9 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		{"user_catalog_table", RELOPT_TYPE_BOOL,
 		offsetof(StdRdOptions, user_catalog_table)},
 		{"parallel_workers", RELOPT_TYPE_INT,
-		offsetof(StdRdOptions, parallel_workers)}
+		offsetof(StdRdOptions, parallel_workers)},
+		{"storage_engine", RELOPT_TYPE_STRING,
+		offsetof(StdRdOptions, relstorage_offset)}
 	};
 
 	options = parseRelOptions(reloptions, validate, kind, &numoptions);
@@ -1565,4 +1579,22 @@ AlterTableGetRelOptionsLockLevel(List *defList)
 	}
 
 	return lockmode;
+}
+
+/*---------------------------------------------------------------------
+ * Validator for "storage_engine" reloption on relations. The allowed values
+ * are "heap"(heap) and "zheap"(zheap).
+ */
+void
+validateStorageEngine(const char *value)
+{
+	if (value == NULL ||
+		(pg_strcasecmp(value, "heap") != 0 &&
+		 pg_strcasecmp(value, "zheap") != 0))
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid value for \"storage_engine\" option"),
+				 errdetail("Valid values are \"heap\" and \"zheap\".")));
+	}
 }

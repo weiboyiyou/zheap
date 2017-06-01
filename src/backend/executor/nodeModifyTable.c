@@ -276,18 +276,20 @@ ExecInsert(ModifyTableState *mtstate,
 	TransitionCaptureState *ar_insert_trig_tcs;
 
 	/*
-	 * get the heap tuple out of the tuple table slot, making sure we have a
-	 * writable copy
-	 */
-	if (enable_zheap)
-		ztuple = ExecMaterializeZSlot(slot);
-	else
-		tuple = ExecMaterializeSlot(slot);
-
-	/*
 	 * get information on the (current) result relation
 	 */
 	resultRelInfo = estate->es_result_relation_info;
+
+	resultRelationDesc = resultRelInfo->ri_RelationDesc;
+
+	/*
+	 * get the heap tuple out of the tuple table slot, making sure we have a
+	 * writable copy
+	 */
+	if (RelationStorageIsZHeap(resultRelationDesc))
+		ztuple = ExecMaterializeZSlot(slot);
+	else
+		tuple = ExecMaterializeSlot(slot);
 
 	/* Determine the partition to heap_insert the tuple into */
 	if (mtstate->mt_partition_tuple_routing)
@@ -468,7 +470,7 @@ ExecInsert(ModifyTableState *mtstate,
 		 * Constraints might reference the tableoid column, so initialize
 		 * t_tableOid before evaluating them.
 		 */
-		if (enable_zheap)
+		if (RelationStorageIsZHeap(resultRelationDesc))
 			ztuple->t_tableOid = RelationGetRelid(resultRelationDesc);
 		else
 			tuple->t_tableOid = RelationGetRelid(resultRelationDesc);
@@ -620,7 +622,7 @@ ExecInsert(ModifyTableState *mtstate,
 			 * Note: heap_insert returns the tid (location) of the new tuple
 			 * in the t_self field.
 			 */
-			if (enable_zheap)
+			if (RelationStorageIsZHeap(resultRelationDesc))
 				newId = zheap_insert(resultRelationDesc, ztuple,
 									 estate->es_output_cid,
 									 0);
@@ -641,7 +643,7 @@ ExecInsert(ModifyTableState *mtstate,
 	{
 		(estate->es_processed)++;
 		estate->es_lastoid = newId;
-		if (enable_zheap)
+		if (RelationStorageIsZHeap(resultRelationDesc))
 			setLastTid(&(ztuple->t_self));
 		else
 			setLastTid(&(tuple->t_self));

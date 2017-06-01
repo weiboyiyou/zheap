@@ -208,7 +208,7 @@ RelationAddExtraBlocks(Relation relation, BulkInsertState bistate)
 		/* Extend by one page. */
 		LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 		page = BufferGetPage(buffer);
-		if (enable_zheap)
+		if (RelationStorageIsZHeap(relation))
 		{
 			ZheapInitPage(page, BufferGetPageSize(buffer));
 			freespace = PageGetZHeapFreeSpace(page);
@@ -478,7 +478,7 @@ loop:
 		 * we're done.
 		 */
 		page = BufferGetPage(buffer);
-		if (enable_zheap)
+		if (RelationStorageIsZHeap(relation))
 			pageFreeSpace = PageGetZHeapFreeSpace(page);
 		else
 			pageFreeSpace = PageGetHeapFreeSpace(page);
@@ -608,7 +608,7 @@ loop:
 			 BufferGetBlockNumber(buffer),
 			 RelationGetRelationName(relation));
 
-	if (enable_zheap)
+	if (RelationStorageIsZHeap(relation))
 	{
 		ZheapInitPage(page, BufferGetPageSize(buffer));
 		if (len > PageGetZHeapFreeSpace(page))
