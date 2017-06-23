@@ -817,11 +817,18 @@ ExecDelete(ModifyTableState *mtstate,
 		 * mode transactions.
 		 */
 ldelete:;
-		result = heap_delete(resultRelationDesc, tupleid,
-							 estate->es_output_cid,
-							 estate->es_crosscheck_snapshot,
-							 true /* wait for commit */ ,
-							 &hufd);
+		if (RelationStorageIsZHeap(resultRelationDesc))
+			result = zheap_delete(resultRelationDesc, tupleid,
+								  estate->es_output_cid,
+								  estate->es_crosscheck_snapshot,
+								  true /* wait for commit */ ,
+								  &hufd);
+		else
+			result = heap_delete(resultRelationDesc, tupleid,
+								 estate->es_output_cid,
+								 estate->es_crosscheck_snapshot,
+								 true /* wait for commit */ ,
+								 &hufd);
 		switch (result)
 		{
 			case HeapTupleSelfUpdated:
@@ -867,9 +874,13 @@ ldelete:;
 					ereport(ERROR,
 							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 							 errmsg("could not serialize access due to concurrent update")));
-				if (!ItemPointerEquals(tupleid, &hufd.ctid))
+				if (!ItemPointerEquals(tupleid, &hufd.ctid) ||
+					hufd.in_place_updated)
 				{
 					TupleTableSlot *epqslot;
+
+					if (RelationStorageIsZHeap(resultRelationDesc))
+						elog(ERROR, "EvalPlanQual mechanism is not supported for zheap");
 
 					epqslot = EvalPlanQual(estate,
 										   epqstate,
@@ -1025,7 +1036,8 @@ ExecUpdate(ModifyTableState *mtstate,
 		   EState *estate,
 		   bool canSetTag)
 {
-	HeapTuple	tuple;
+	HeapTuple	tuple = NULL;
+	ZHeapTuple	ztuple = NULL;
 	ResultRelInfo *resultRelInfo;
 	Relation	resultRelationDesc;
 	HTSU_Result result;
@@ -1040,16 +1052,19 @@ ExecUpdate(ModifyTableState *mtstate,
 		elog(ERROR, "cannot UPDATE during bootstrap");
 
 	/*
-	 * get the heap tuple out of the tuple table slot, making sure we have a
-	 * writable copy
-	 */
-	tuple = ExecMaterializeSlot(slot);
-
-	/*
 	 * get information on the (current) result relation
 	 */
 	resultRelInfo = estate->es_result_relation_info;
 	resultRelationDesc = resultRelInfo->ri_RelationDesc;
+
+	/*
+	 * get the heap tuple out of the tuple table slot, making sure we have a
+	 * writable copy
+	 */
+	if (RelationStorageIsZHeap(resultRelationDesc))
+		ztuple = ExecMaterializeZSlot(slot);
+	else
+		tuple = ExecMaterializeSlot(slot);
 
 	/* BEFORE ROW UPDATE Triggers */
 	if (resultRelInfo->ri_TrigDesc &&
@@ -1109,7 +1124,10 @@ ExecUpdate(ModifyTableState *mtstate,
 		 * Constraints might reference the tableoid column, so initialize
 		 * t_tableOid before evaluating them.
 		 */
-		tuple->t_tableOid = RelationGetRelid(resultRelationDesc);
+		if (RelationStorageIsZHeap(resultRelationDesc))
+			ztuple->t_tableOid = RelationGetRelid(resultRelationDesc);
+		else
+			tuple->t_tableOid = RelationGetRelid(resultRelationDesc);
 
 		/*
 		 * Check any RLS UPDATE WITH CHECK policies
@@ -1265,11 +1283,18 @@ lreplace:;
 		 * needed for referential integrity updates in transaction-snapshot
 		 * mode transactions.
 		 */
-		result = heap_update(resultRelationDesc, tupleid, tuple,
-							 estate->es_output_cid,
-							 estate->es_crosscheck_snapshot,
-							 true /* wait for commit */ ,
-							 &hufd, &lockmode);
+		if (RelationStorageIsZHeap(resultRelationDesc))
+			result = zheap_update(resultRelationDesc, tupleid, ztuple,
+								  estate->es_output_cid,
+								  estate->es_crosscheck_snapshot,
+								  true /* wait for commit */ ,
+								  &hufd, &lockmode);
+		else
+			result = heap_update(resultRelationDesc, tupleid, tuple,
+								 estate->es_output_cid,
+								 estate->es_crosscheck_snapshot,
+								 true /* wait for commit */ ,
+								 &hufd, &lockmode);
 		switch (result)
 		{
 			case HeapTupleSelfUpdated:
@@ -1314,9 +1339,13 @@ lreplace:;
 					ereport(ERROR,
 							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 							 errmsg("could not serialize access due to concurrent update")));
-				if (!ItemPointerEquals(tupleid, &hufd.ctid))
+				if (!ItemPointerEquals(tupleid, &hufd.ctid) ||
+					hufd.in_place_updated)
 				{
 					TupleTableSlot *epqslot;
+
+					if (RelationStorageIsZHeap(resultRelationDesc))
+						elog(ERROR, "EvalPlanQual mechanism is not supported for zheap");
 
 					epqslot = EvalPlanQual(estate,
 										   epqstate,
@@ -1329,7 +1358,10 @@ lreplace:;
 					{
 						*tupleid = hufd.ctid;
 						slot = ExecFilterJunk(resultRelInfo->ri_junkFilter, epqslot);
-						tuple = ExecMaterializeSlot(slot);
+						if (RelationStorageIsZHeap(resultRelationDesc))
+							ztuple = ExecMaterializeZSlot(slot);
+						else
+							tuple = ExecMaterializeSlot(slot);
 						goto lreplace;
 					}
 				}
