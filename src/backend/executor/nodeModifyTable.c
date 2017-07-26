@@ -882,12 +882,9 @@ ldelete:;
 							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 							 errmsg("could not serialize access due to concurrent update")));
 				if (!ItemPointerEquals(tupleid, &hufd.ctid) ||
-					hufd.in_place_updated)
+					hufd.in_place_updated_or_locked)
 				{
 					TupleTableSlot *epqslot;
-
-					if (RelationStorageIsZHeap(resultRelationDesc))
-						elog(ERROR, "EvalPlanQual mechanism is not supported for zheap");
 
 					epqslot = EvalPlanQual(estate,
 										   epqstate,
@@ -1347,12 +1344,9 @@ lreplace:;
 							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 							 errmsg("could not serialize access due to concurrent update")));
 				if (!ItemPointerEquals(tupleid, &hufd.ctid) ||
-					hufd.in_place_updated)
+					hufd.in_place_updated_or_locked)
 				{
 					TupleTableSlot *epqslot;
-
-					if (RelationStorageIsZHeap(resultRelationDesc))
-						elog(ERROR, "EvalPlanQual mechanism is not supported for zheap");
 
 					epqslot = EvalPlanQual(estate,
 										   epqstate,
