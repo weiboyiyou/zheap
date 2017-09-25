@@ -18,6 +18,7 @@
 #include "access/sysattr.h"
 #include "access/htup_details.h"
 #include "access/xact.h"
+#include "access/zheaputils.h"
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
@@ -2344,7 +2345,16 @@ ExecBRInsertTriggers(EState *estate, ResultRelInfo *relinfo,
 
 		if (newslot->tts_tupleDescriptor != tupdesc)
 			ExecSetSlotDescriptor(newslot, tupdesc);
-		ExecStoreTuple(newtuple, newslot, InvalidBuffer, false);
+
+		if (RelationStorageIsZHeap(relinfo->ri_RelationDesc))
+		{
+			ZHeapTuple	ztuple;
+			ztuple = heap_to_zheap(newtuple, tupdesc);
+			ExecStoreZTuple(ztuple, newslot, InvalidBuffer, true);
+		}
+		else
+			ExecStoreTuple(newtuple, newslot, InvalidBuffer, false);
+
 		slot = newslot;
 	}
 	return slot;
@@ -2425,7 +2435,14 @@ ExecIRInsertTriggers(EState *estate, ResultRelInfo *relinfo,
 
 		if (newslot->tts_tupleDescriptor != tupdesc)
 			ExecSetSlotDescriptor(newslot, tupdesc);
-		ExecStoreTuple(newtuple, newslot, InvalidBuffer, false);
+		if (RelationStorageIsZHeap(relinfo->ri_RelationDesc))
+		{
+			ZHeapTuple	ztuple;
+			ztuple = heap_to_zheap(newtuple, tupdesc);
+			ExecStoreZTuple(ztuple, newslot, InvalidBuffer, true);
+		}
+		else
+			ExecStoreTuple(newtuple, newslot, InvalidBuffer, false);
 		slot = newslot;
 	}
 	return slot;
@@ -2516,8 +2533,12 @@ ExecBRDeleteTriggers(EState *estate, EPQState *epqstate,
 	Assert(HeapTupleIsValid(fdw_trigtuple) ^ ItemPointerIsValid(tupleid));
 	if (fdw_trigtuple == NULL)
 	{
-		trigtuple = GetTupleForTrigger(estate, epqstate, relinfo, tupleid,
-									   LockTupleExclusive, &newSlot);
+		if (RelationStorageIsZHeap(relinfo->ri_RelationDesc))
+			trigtuple = GetZTupleForTrigger(estate, epqstate, relinfo, tupleid,
+											LockTupleExclusive, &newSlot);
+		else
+			trigtuple = GetTupleForTrigger(estate, epqstate, relinfo, tupleid,
+										   LockTupleExclusive, &newSlot);
 		if (trigtuple == NULL)
 			return false;
 	}
@@ -2583,12 +2604,23 @@ ExecARDeleteTriggers(EState *estate, ResultRelInfo *relinfo,
 
 		Assert(HeapTupleIsValid(fdw_trigtuple) ^ ItemPointerIsValid(tupleid));
 		if (fdw_trigtuple == NULL)
-			trigtuple = GetTupleForTrigger(estate,
-										   NULL,
-										   relinfo,
-										   tupleid,
-										   LockTupleExclusive,
-										   NULL);
+		{
+			if (RelationStorageIsZHeap(relinfo->ri_RelationDesc))
+				trigtuple = GetZTupleForTrigger(estate,
+												NULL,
+												relinfo,
+												tupleid,
+												LockTupleExclusive,
+												NULL);
+			else
+				trigtuple = GetTupleForTrigger(estate,
+											   NULL,
+											   relinfo,
+											   tupleid,
+											   LockTupleExclusive,
+											   NULL);
+
+		}
 		else
 			trigtuple = fdw_trigtuple;
 
@@ -2745,7 +2777,11 @@ ExecBRUpdateTriggers(EState *estate, EPQState *epqstate,
 	if (fdw_trigtuple == NULL)
 	{
 		/* get a copy of the on-disk tuple we are planning to update */
-		trigtuple = GetTupleForTrigger(estate, epqstate, relinfo, tupleid,
+		if (RelationStorageIsZHeap(relinfo->ri_RelationDesc))
+			trigtuple = GetZTupleForTrigger(estate, epqstate, relinfo, tupleid,
+									   lockmode, &newSlot);
+		else
+			trigtuple = GetTupleForTrigger(estate, epqstate, relinfo, tupleid,
 									   lockmode, &newSlot);
 		if (trigtuple == NULL)
 			return NULL;		/* cancel the update action */
@@ -2831,9 +2867,17 @@ ExecBRUpdateTriggers(EState *estate, EPQState *epqstate,
 
 		if (newslot->tts_tupleDescriptor != tupdesc)
 			ExecSetSlotDescriptor(newslot, tupdesc);
-		ExecStoreTuple(newtuple, newslot, InvalidBuffer, false);
+		if (RelationStorageIsZHeap(relinfo->ri_RelationDesc))
+		{
+			ZHeapTuple	ztuple;
+			ztuple = heap_to_zheap(newtuple, tupdesc);
+			ExecStoreZTuple(ztuple, newslot, InvalidBuffer, true);
+		}
+		else
+			ExecStoreTuple(newtuple, newslot, InvalidBuffer, false);
 		slot = newslot;
 	}
+
 	return slot;
 }
 
@@ -2861,12 +2905,22 @@ ExecARUpdateTriggers(EState *estate, ResultRelInfo *relinfo,
 		 * In such case, either old tuple or new tuple can be NULL.
 		 */
 		if (fdw_trigtuple == NULL && ItemPointerIsValid(tupleid))
-			trigtuple = GetTupleForTrigger(estate,
-										   NULL,
-										   relinfo,
-										   tupleid,
-										   LockTupleExclusive,
-										   NULL);
+		{
+			if (RelationStorageIsZHeap(relinfo->ri_RelationDesc))
+				trigtuple = GetZTupleForTrigger(estate,
+												NULL,
+												relinfo,
+												tupleid,
+												LockTupleExclusive,
+												NULL);
+			else
+				trigtuple = GetTupleForTrigger(estate,
+											   NULL,
+											   relinfo,
+											   tupleid,
+											   LockTupleExclusive,
+											   NULL);
+		}
 		else
 			trigtuple = fdw_trigtuple;
 
@@ -2939,7 +2993,16 @@ ExecIRUpdateTriggers(EState *estate, ResultRelInfo *relinfo,
 
 		if (newslot->tts_tupleDescriptor != tupdesc)
 			ExecSetSlotDescriptor(newslot, tupdesc);
-		ExecStoreTuple(newtuple, newslot, InvalidBuffer, false);
+
+		if (RelationStorageIsZHeap(relinfo->ri_RelationDesc))
+		{
+			ZHeapTuple	ztuple;
+			ztuple = heap_to_zheap(newtuple, tupdesc);
+			ExecStoreZTuple(ztuple, newslot, InvalidBuffer, true);
+		}
+		else
+			ExecStoreTuple(newtuple, newslot, InvalidBuffer, false);
+
 		slot = newslot;
 	}
 	return slot;
