@@ -2590,7 +2590,7 @@ PageFreezeTransSlots(Relation relation, Buffer buf)
 
 			itemid = PageGetItemId(page, offnum);
 
-			if (!ItemIdIsUsed(itemid))
+			if (!ItemIdIsUsed(itemid) || ItemIdIsDead(itemid))
 				continue;
 
 			tup_hdr = (ZHeapTupleHeader) PageGetItem(page, itemid);
@@ -2674,7 +2674,7 @@ PageFreezeTransSlots(Relation relation, Buffer buf)
 
 			itemid = PageGetItemId(page, offnum);
 
-			if (!ItemIdIsUsed(itemid))
+			if (!ItemIdIsUsed(itemid) || ItemIdIsDead(itemid))
 				continue;
 
 			tup_hdr = (ZHeapTupleHeader) PageGetItem(page, itemid);
