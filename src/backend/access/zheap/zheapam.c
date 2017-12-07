@@ -3449,8 +3449,12 @@ PageFreezeTransSlots(Relation relation, Buffer buf)
 
 			/* Stores latest undorec for slot for debug log */
 			slot_urec[slotno] = &undorecord[i];
-			tuples[i].offnum = offnum;
-			tuples[i].slotno = slotno;
+
+			if (tuples != NULL)
+			{
+				tuples[i].offnum = offnum;
+				tuples[i].slotno = slotno;
+			}
 		}
 
 		/* NO EREPORT(ERROR) from here till changes are logged */
@@ -3571,7 +3575,9 @@ PageFreezeTransSlots(Relation relation, Buffer buf)
 		END_CRIT_SECTION();
 
 		UnlockReleaseUndoBuffers();
-		pfree(scratch);
+
+		if (scratch != NULL)
+			pfree(scratch);
 
 		return true;
 	}
