@@ -2350,7 +2350,7 @@ ExecBRInsertTriggers(EState *estate, ResultRelInfo *relinfo,
 		{
 			ZHeapTuple	ztuple;
 			ztuple = heap_to_zheap(newtuple, tupdesc);
-			ExecStoreZTuple(ztuple, newslot, InvalidBuffer, true);
+			ExecStoreZTuple(ztuple, newslot, InvalidBuffer, false);
 		}
 		else
 			ExecStoreTuple(newtuple, newslot, InvalidBuffer, false);
@@ -2439,7 +2439,7 @@ ExecIRInsertTriggers(EState *estate, ResultRelInfo *relinfo,
 		{
 			ZHeapTuple	ztuple;
 			ztuple = heap_to_zheap(newtuple, tupdesc);
-			ExecStoreZTuple(ztuple, newslot, InvalidBuffer, true);
+			ExecStoreZTuple(ztuple, newslot, InvalidBuffer, false);
 		}
 		else
 			ExecStoreTuple(newtuple, newslot, InvalidBuffer, false);
@@ -2873,7 +2873,7 @@ ExecBRUpdateTriggers(EState *estate, EPQState *epqstate,
 		{
 			ZHeapTuple	ztuple;
 			ztuple = heap_to_zheap(newtuple, tupdesc);
-			ExecStoreZTuple(ztuple, newslot, InvalidBuffer, true);
+			ExecStoreZTuple(ztuple, newslot, InvalidBuffer, false);
 		}
 		else
 			ExecStoreTuple(newtuple, newslot, InvalidBuffer, false);
@@ -3001,7 +3001,7 @@ ExecIRUpdateTriggers(EState *estate, ResultRelInfo *relinfo,
 		{
 			ZHeapTuple	ztuple;
 			ztuple = heap_to_zheap(newtuple, tupdesc);
-			ExecStoreZTuple(ztuple, newslot, InvalidBuffer, true);
+			ExecStoreZTuple(ztuple, newslot, InvalidBuffer, false);
 		}
 		else
 			ExecStoreTuple(newtuple, newslot, InvalidBuffer, false);
