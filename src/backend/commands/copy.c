@@ -23,6 +23,8 @@
 #include "access/sysattr.h"
 #include "access/xact.h"
 #include "access/xlog.h"
+#include "access/zheaputils.h"
+#include "catalog/dependency.h"
 #include "catalog/pg_type.h"
 #include "commands/copy.h"
 #include "commands/defrem.h"
@@ -2793,8 +2795,15 @@ CopyFrom(CopyState cstate)
 					List	   *recheckIndexes = NIL;
 
 					/* OK, store the tuple and create index entries for it */
-					heap_insert(resultRelInfo->ri_RelationDesc, tuple, mycid,
-								hi_options, bistate);
+					if (RelationStorageIsZHeap(resultRelInfo->ri_RelationDesc))
+					{
+						zheap_insert(resultRelInfo->ri_RelationDesc, ztuple, mycid,
+									hi_options);
+						tuple = zheap_to_heap(ztuple, resultRelInfo->ri_RelationDesc->rd_att);
+					}
+					else
+						heap_insert(resultRelInfo->ri_RelationDesc, tuple, mycid,
+									hi_options, bistate);
 
 					if (resultRelInfo->ri_NumIndices > 0)
 						recheckIndexes = ExecInsertIndexTuples(slot,
@@ -2808,6 +2817,8 @@ CopyFrom(CopyState cstate)
 					ExecARInsertTriggers(estate, resultRelInfo, tuple,
 										 recheckIndexes, cstate->transition_capture);
 
+					if (RelationStorageIsZHeap(resultRelInfo->ri_RelationDesc))
+						heap_freetuple(tuple);
 					list_free(recheckIndexes);
 				}
 			}
