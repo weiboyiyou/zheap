@@ -109,6 +109,11 @@
  *
  * tts_slow/tts_off are saved state for slot_deform_tuple, and should not
  * be touched by any other code.
+ *
+ * For page mode scan of zheap table, locally stored per page tuples are
+ * freed once we move to new page or at end of scan. The tts_shouldFreeZtup
+ * will be set false for such tuples. The tts_shouldFreeZtup is set true
+ * only for single tuple scan mode.
  *----------
  */
 typedef struct TupleTableSlot
@@ -117,6 +122,7 @@ typedef struct TupleTableSlot
 	bool		tts_isempty;	/* true = slot is empty */
 	bool		tts_shouldFree; /* should pfree tts_tuple? */
 	bool		tts_shouldFreeMin;	/* should pfree tts_mintuple? */
+	bool		tts_shouldFreeZtup;	/* should pfree tts_ztuple? */
 	bool		tts_slow;		/* saved state for slot_deform_tuple */
 	HeapTuple	tts_tuple;		/* physical tuple, or NULL if virtual */
 	ZHeapTuple	tts_ztuple;
