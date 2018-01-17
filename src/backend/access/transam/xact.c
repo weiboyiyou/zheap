@@ -298,6 +298,14 @@ typedef struct SubXactCallbackItem
 
 static SubXactCallbackItem *SubXact_callbacks = NULL;
 
+/* Location in undo log from where to start applying the undo actions. */
+static UndoRecPtr UndoActionStartPtr = InvalidUndoRecPtr;
+
+/* Location in undo log up to which undo actions need to be applied. */
+static UndoRecPtr UndoActionEndPtr = InvalidUndoRecPtr;
+
+/* Do we need to perform any undo actions? */
+static bool	PerformUndoActions = false;
 
 /* local function prototypes */
 static void AssignTransactionId(TransactionState s);
@@ -3010,6 +3018,12 @@ AbortCurrentTransaction(void)
 {
 	TransactionState s = CurrentTransactionState;
 
+	/*
+	 * The undo actions are allowed to be executed at the end of statement
+	 * execution when we are not in transaction block, otherwise they are
+	 * executed when user explicitly ends the transaction.
+	 */
+	PerformUndoActions = false;
 	switch (s->blockState)
 	{
 		case TBLOCK_DEFAULT:
@@ -3039,6 +3053,13 @@ AbortCurrentTransaction(void)
 			 * transaction block as if it were a simple statement.
 			 */
 		case TBLOCK_STARTED:
+			/*
+			 * Remember the required information to perform undo actions
+			 * before the start of next statement execution.
+			 */
+			PerformUndoActions = true;
+			UndoActionStartPtr = s->latest_urec_ptr;
+			UndoActionEndPtr = s->start_urec_ptr;
 		case TBLOCK_IMPLICIT_INPROGRESS:
 			AbortTransaction();
 			CleanupTransaction();
@@ -3154,6 +3175,73 @@ AbortCurrentTransaction(void)
 			CleanupSubTransaction();
 			AbortCurrentTransaction();
 			break;
+	}
+}
+
+/*
+ * XactPerformUndoActionsIfPending - Execute pending undo actions.
+ *
+ * If the parent transaction state is valid (when there is an error in the
+ * subtransaction and rollback to savepoint is executed), then allow to
+ * perform undo actions in it, otherwise perform them in a new transaction.
+ */
+void
+XactPerformUndoActionsIfPending()
+{
+	TransactionState s = CurrentTransactionState;
+
+	if (!PerformUndoActions)
+		return;
+
+	/* If there is no undo log, return. */
+	if (!UndoRecPtrIsValid(UndoActionStartPtr))
+	{
+		PerformUndoActions = false;
+		return;
+	}
+
+	/*
+	 * If there is no transaction is running then start a new transaction and
+	 * execute undo actions, otherwise we execute undo actions under parent
+	 * transaction.
+	 */
+	if (s->transactionId == InvalidTransactionId)
+	{
+		TransactionState xact;
+
+		/* Start a new transaction for performing the rollback */
+		StartTransactionCommand();
+		xact = CurrentTransactionState;
+
+		/*
+		 * Store the previous transactions start and end undo record pointers
+		 * into this transaction's state so that if there is some error while
+		 * performing undo actions we can restart from begining.
+		 */
+		xact->start_urec_ptr = UndoActionEndPtr;
+		xact->latest_urec_ptr = UndoActionStartPtr;
+		/* execute the undo actions */
+		execute_undo_actions(UndoActionStartPtr, UndoActionEndPtr, true);
+		CommitTransactionCommand();
+		PerformUndoActions = false;
+	}
+	else
+	{
+		UndoRecPtr parent_latest_urec_ptr = s->latest_urec_ptr;
+
+		/*
+		 * Save the latest_urec_ptr in the parent state so that we can rollback
+		 * from the parent transaction in case of error while applying undo
+		 * actions.
+		 */
+		s->latest_urec_ptr = UndoActionStartPtr;
+
+		execute_undo_actions(UndoActionStartPtr, UndoActionEndPtr, false);
+
+		PerformUndoActions = false;
+
+		/* Restore parent's state. */
+		s->latest_urec_ptr = parent_latest_urec_ptr;
 	}
 }
 
@@ -3681,6 +3769,19 @@ EndTransactionBlock(void)
 			break;
 	}
 
+	/*
+	 * We need to perform undo actions if the transaction is failed.  Remember
+	 * the required information to perform undo actions at the end of
+	 * statement execution.
+	 */
+	if (!result)
+	{
+		TransactionState xact = &TopTransactionStateData;
+		UndoActionStartPtr = s->latest_urec_ptr;
+		UndoActionEndPtr = xact->start_urec_ptr;
+		PerformUndoActions = true;
+	}
+
 	return result;
 }
 
@@ -3796,6 +3897,17 @@ UserAbortTransactionBlock(void)
 	/* execute the undo actions, but we should be inside current transaction */
 	if (latest_urec_ptr && (CurrentTransactionState->state == TRANS_INPROGRESS))
 		execute_undo_actions(latest_urec_ptr, s->start_urec_ptr, true);
+	else
+	{
+		/*
+		 * We are not in a valid transaction state, so can't perform undo
+		 * actions at this stage.  Remember the required information to
+		 * perform undo actions at the end of statement execution.
+		 */
+		UndoActionStartPtr = latest_urec_ptr;
+		UndoActionEndPtr = s->start_urec_ptr;
+		PerformUndoActions = true;
+	}
 }
 
 /*
@@ -3947,6 +4059,8 @@ ReleaseSavepoint(List *options)
 				xact;
 	ListCell   *cell;
 	char	   *name = NULL;
+	UndoRecPtr	latest_urec_ptr = s->latest_urec_ptr;
+	UndoRecPtr	start_urec_ptr = s->latest_urec_ptr;
 
 	/*
 	 * Workers synchronize transaction state at the beginning of each parallel
@@ -4050,8 +4164,26 @@ ReleaseSavepoint(List *options)
 		if (xact == target)
 			break;
 		xact = xact->parent;
+		if (!UndoRecPtrIsValid(latest_urec_ptr))
+			latest_urec_ptr = xact->latest_urec_ptr;
+
+		if (UndoRecPtrIsValid(xact->start_urec_ptr))
+			start_urec_ptr = xact->latest_urec_ptr;
+
 		Assert(PointerIsValid(xact));
 	}
+
+	/*
+	 * Before cleaning up the current sub transaction state, overwrite parent
+	 * transaction's latest_urec_ptr with current transaction's latest_urec_ptr
+	 * so that in case parent transaction get aborted we will not skip
+	 * performing undo for this transaction.  Also set the start_urec_ptr if
+	 * parent start_urec_ptr is not valid.
+	 */
+	if (UndoRecPtrIsValid(latest_urec_ptr))
+		xact->parent->latest_urec_ptr = latest_urec_ptr;
+	if (!UndoRecPtrIsValid(xact->parent->start_urec_ptr))
+		xact->parent->start_urec_ptr = start_urec_ptr;
 }
 
 /*
@@ -4069,6 +4201,7 @@ RollbackToSavepoint(List *options)
 	ListCell   *cell;
 	char	   *name = NULL;
 	UndoRecPtr	latest_urec_ptr = s->latest_urec_ptr;
+	UndoRecPtr	start_urec_ptr = s->start_urec_ptr;
 
 	/*
 	 * Workers synchronize transaction state at the beginning of each parallel
@@ -4180,6 +4313,9 @@ RollbackToSavepoint(List *options)
 		Assert(PointerIsValid(xact));
 		if (!UndoRecPtrIsValid(latest_urec_ptr))
 			latest_urec_ptr = xact->latest_urec_ptr;
+
+		if (UndoRecPtrIsValid(xact->start_urec_ptr))
+			start_urec_ptr = xact->start_urec_ptr;
 	}
 
 	/* And mark the target as "restart pending" */
@@ -4193,7 +4329,21 @@ RollbackToSavepoint(List *options)
 
 	/* execute the undo actions */
 	if (latest_urec_ptr && (s->state == TRANS_INPROGRESS))
-		execute_undo_actions(latest_urec_ptr, xact->start_urec_ptr, false);
+	{
+		execute_undo_actions(latest_urec_ptr, start_urec_ptr, false);
+		xact->latest_urec_ptr = InvalidUndoRecPtr;
+	}
+	else
+	{
+		/*
+		 * We are not in a valid transaction state, so can't perform undo
+		 * actions at this stage.  Remember the required information to
+		 * perform undo actions at the end of statement execution.
+		 */
+		UndoActionStartPtr = latest_urec_ptr;
+		UndoActionEndPtr = start_urec_ptr;
+		PerformUndoActions = true;
+	}
 }
 
 /*
@@ -4299,6 +4449,19 @@ ReleaseCurrentSubTransaction(void)
 			 BlockStateAsString(s->blockState));
 	Assert(s->state == TRANS_INPROGRESS);
 	MemoryContextSwitchTo(CurTransactionContext);
+
+	/*
+	 * Before cleaning up the current sub transaction state, overwrite parent
+	 * transaction's latest_urec_ptr with current transaction's latest_urec_ptr
+	 * so that in case parent transaction get aborted we will not skip
+	 * performing undo for this transaction.
+	 */
+	if (UndoRecPtrIsValid(s->latest_urec_ptr))
+		s->parent->latest_urec_ptr = s->latest_urec_ptr;
+
+	if (!UndoRecPtrIsValid(s->parent->start_urec_ptr))
+		s->parent->start_urec_ptr = s->start_urec_ptr;
+
 	CommitSubTransaction();
 	s = CurrentTransactionState;	/* changed by pop */
 	Assert(s->state == TRANS_INPROGRESS);
@@ -4315,6 +4478,8 @@ void
 RollbackAndReleaseCurrentSubTransaction(void)
 {
 	TransactionState s = CurrentTransactionState;
+	UndoRecPtr latest_urec_ptr = InvalidUndoRecPtr;
+	UndoRecPtr start_urec_ptr = InvalidUndoRecPtr;
 
 	/*
 	 * Unlike ReleaseCurrentSubTransaction(), this is nominally permitted
@@ -4361,6 +4526,16 @@ RollbackAndReleaseCurrentSubTransaction(void)
 	if (s->blockState == TBLOCK_SUBINPROGRESS)
 		AbortSubTransaction();
 
+	/*
+	 * Remember the required information to perform undo actions before
+	 * cleaning up the subtransaction state.
+	 */
+	if (UndoRecPtrIsValid(s->latest_urec_ptr))
+	{
+		latest_urec_ptr = s->latest_urec_ptr;
+		start_urec_ptr = s->start_urec_ptr;
+	}
+
 	/* And clean it up, too */
 	CleanupSubTransaction();
 
@@ -4369,6 +4544,25 @@ RollbackAndReleaseCurrentSubTransaction(void)
 				s->blockState == TBLOCK_INPROGRESS ||
 				s->blockState == TBLOCK_IMPLICIT_INPROGRESS ||
 				s->blockState == TBLOCK_STARTED);
+
+	if (UndoRecPtrIsValid(latest_urec_ptr))
+	{
+		UndoRecPtr parent_latest_urec_ptr = s->latest_urec_ptr;
+
+		/*
+		 * Store the undo action start point in the parent state so that we can
+		 * apply undo actions these undos also during rollback of parent
+		 * transaction in case of error while applying the undo actions.
+		 */
+		s->latest_urec_ptr = latest_urec_ptr;
+		execute_undo_actions(latest_urec_ptr, start_urec_ptr, false);
+
+		/* Restore parent state. */
+		s->latest_urec_ptr = parent_latest_urec_ptr;
+	}
+
+	/* Successfully performed undo actions so reset the flag. */
+	PerformUndoActions = false;
 }
 
 /*
