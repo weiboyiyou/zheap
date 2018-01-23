@@ -434,7 +434,7 @@ static relopt_string stringRelOpts[] =
 		{
 			"storage_engine",
 			"Underlying storage engine for this relation.",
-			RELOPT_KIND_HEAP,
+			RELOPT_KIND_HEAP | RELOPT_KIND_PARTITIONED,
 			AccessExclusiveLock
 		},
 		1,

@@ -371,7 +371,13 @@ ExecInsert(ModifyTableState *mtstate,
 		 * We might need to convert from the parent rowtype to the partition
 		 * rowtype.
 		 */
-		tuple = ConvertPartitionTupleSlot(proute->parent_child_tupconv_maps[leaf_part_index],
+		if (RelationStorageIsZHeap(resultRelationDesc))
+			ztuple = ConvertPartitionZTupleSlot(proute->parent_child_tupconv_maps[leaf_part_index],
+										  ztuple,
+										  proute->partition_tuple_slot,
+										  &slot);
+		else
+			tuple = ConvertPartitionTupleSlot(proute->parent_child_tupconv_maps[leaf_part_index],
 										  tuple,
 										  proute->partition_tuple_slot,
 										  &slot);
@@ -1285,7 +1291,14 @@ lreplace:;
 			map_index = resultRelInfo - mtstate->resultRelInfo;
 			Assert(map_index >= 0 && map_index < mtstate->mt_nplans);
 			tupconv_map = tupconv_map_for_subplan(mtstate, map_index);
-			tuple = ConvertPartitionTupleSlot(tupconv_map,
+
+			if (RelationStorageIsZHeap(mtstate->rootResultRelInfo->ri_RelationDesc))
+				ztuple = ConvertPartitionZTupleSlot(tupconv_map,
+											  ztuple,
+											  proute->root_tuple_slot,
+											  &slot);
+			else
+				tuple = ConvertPartitionTupleSlot(tupconv_map,
 											  tuple,
 											  proute->root_tuple_slot,
 											  &slot);

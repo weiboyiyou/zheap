@@ -116,6 +116,10 @@ extern HeapTuple ConvertPartitionTupleSlot(TupleConversionMap *map,
 						  HeapTuple tuple,
 						  TupleTableSlot *new_slot,
 						  TupleTableSlot **p_my_slot);
+extern ZHeapTuple ConvertPartitionZTupleSlot(TupleConversionMap *map,
+						  ZHeapTuple tuple,
+						  TupleTableSlot *new_slot,
+						  TupleTableSlot **p_my_slot);
 extern void ExecCleanupTupleRouting(PartitionTupleRouting *proute);
 
 #endif							/* EXECPARTITION_H */
