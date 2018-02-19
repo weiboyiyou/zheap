@@ -6689,7 +6689,7 @@ reacquire_buffer:
 		 * Keep calm and put that on the page, and then as many other tuples
 		 * as fit.
 		 */
-		if (!(options & ZHTUP_SLOT_FROZEN))
+		if ((options & ZHTUP_SLOT_FROZEN) != ZHTUP_SLOT_FROZEN)
 			ZHeapTupleHeaderSetXactSlot(zheaptuples[ndone]->t_data, trans_slot_id);
 
 		/*
@@ -6766,7 +6766,7 @@ reacquire_buffer:
 				if (PageGetZHeapFreeSpace(page) < MAXALIGN(zheaptup->t_len) + saveFreeSpace)
 					break;
 
-				if (!(options & ZHTUP_SLOT_FROZEN))
+				if ((options & ZHTUP_SLOT_FROZEN) != ZHTUP_SLOT_FROZEN)
 					ZHeapTupleHeaderSetXactSlot(zheaptup->t_data, trans_slot_id);
 
 				RelationPutZHeapTuple(relation, buffer, zheaptup);
