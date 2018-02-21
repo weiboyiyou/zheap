@@ -2994,7 +2994,7 @@ compute_new_xid_infomask(TransactionId tup_xid, uint16 old_infomask,
 
 	if (TransactionIdIsInProgress(tup_xid))
 	{
-		LockTupleMode old_mode;
+		LockTupleMode old_mode = LockTupleKeyShare; /* silence compiler */
 
 		if (ZHEAP_XID_IS_LOCKED_ONLY(old_infomask))
 		{
@@ -3066,7 +3066,7 @@ compute_new_xid_infomask(TransactionId tup_xid, uint16 old_infomask,
 		}
 	}
 
-	Assert(new_xid != InvalidTransactionId);	/* silence compiler */
+	new_xid = new_xid;			/* silence compiler */
 
 	*result_infomask = new_infomask;
 }

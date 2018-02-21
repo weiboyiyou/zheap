@@ -2894,7 +2894,7 @@ IndexBuildZHeapRangeScan(Relation zheapRelation,
 	EState	   *estate;
 	ExprContext *econtext;
 	Snapshot	snapshot;
-	TransactionId OldestXmin;
+	TransactionId OldestXmin = InvalidTransactionId;
 
 	/*
 	 * sanity checks
