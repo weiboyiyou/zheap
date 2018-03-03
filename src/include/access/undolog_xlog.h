@@ -29,7 +29,6 @@ typedef struct xl_undolog_create
 {
 	UndoLogNumber logno;
 	Oid		tablespace;
-	UndoPersistence persistence;
 } xl_undolog_create;
 
 /* Extend an undo log by adding a new segment. */
