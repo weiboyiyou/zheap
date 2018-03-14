@@ -3500,7 +3500,7 @@ zheap_fetchinsertxid(ZHeapTuple zhtup, ZHeapPageOpaque opaque)
 
 	while(true)
 	{
-		urec = UndoFetchRecord(urec_ptr, blk, offnum, xid);
+		urec = UndoFetchRecord(urec_ptr, blk, offnum, xid, ZHeapSatisfyUndoRecord);
 		if (urec != NULL)
 		{
 			/*
@@ -4526,7 +4526,8 @@ ZHeapTupleGetCid(ZHeapTuple zhtup, Buffer buf)
 	urec = UndoFetchRecord(ZHeapTupleHeaderGetRawUndoPtr(zhtup->t_data, opaque),
 						   ItemPointerGetBlockNumber(&zhtup->t_self),
 						   ItemPointerGetOffsetNumber(&zhtup->t_self),
-						   InvalidTransactionId);
+						   InvalidTransactionId,
+						   ZHeapSatisfyUndoRecord);
 	if (urec == NULL)
 		return InvalidCommandId;
 
@@ -4571,7 +4572,8 @@ fetch_undo_record:
 	urec = UndoFetchRecord(urec_ptr,
 						   ItemPointerGetBlockNumber(&zhtup->t_self),
 						   ItemPointerGetOffsetNumber(&zhtup->t_self),
-						   InvalidTransactionId);
+						   InvalidTransactionId,
+						   ZHeapSatisfyUndoRecord);
 	/*
 	 * Skip the undo record for transaction slot reuse, it is used only for
 	 * the purpose of fetching transaction information for tuples that point
@@ -4685,7 +4687,8 @@ ZHeapTupleGetTransInfo(ZHeapTuple zhtup, Buffer buf, uint64 *epoch_xid_out,
 				urec = UndoFetchRecord(urec_ptr,
 									   ItemPointerGetBlockNumber(&zhtup->t_self),
 									   ItemPointerGetOffsetNumber(&zhtup->t_self),
-									   InvalidTransactionId);
+									   InvalidTransactionId,
+									   ZHeapSatisfyUndoRecord);
 
 				oldestXidHavingUndo = GetXidFromEpochXid(
 						pg_atomic_read_u64(&ProcGlobal->oldestXidWithEpochHavingUndo));
@@ -4801,7 +4804,8 @@ ZHeapPageGetCid(int trans_slot, Buffer buf, OffsetNumber off)
 	urec = UndoFetchRecord(ZHeapPageGetUndoPtr(trans_slot, opaque),
 						   BufferGetBlockNumber(buf),
 						   off,
-						   InvalidTransactionId);
+						   InvalidTransactionId,
+						   ZHeapSatisfyUndoRecord);
 	if (urec == NULL)
 		return InvalidCommandId;
 
@@ -4832,7 +4836,8 @@ fetch_undo_record:
 	urec = UndoFetchRecord(urec_ptr,
 						   ItemPointerGetBlockNumber(ctid),
 						   ItemPointerGetOffsetNumber(ctid),
-						   InvalidTransactionId);
+						   InvalidTransactionId,
+						   ZHeapSatisfyUndoRecord);
 	/*
 	 * Skip the undo record for transaction slot reuse, it is used only for
 	 * the purpose of fetching transaction information for tuples that point
@@ -4955,7 +4960,8 @@ fetch_undo_record:
 		urec = UndoFetchRecord(urec_ptr,
 							   ItemPointerGetBlockNumber(&undo_tup->t_self),
 							   ItemPointerGetOffsetNumber(&undo_tup->t_self),
-							   prev_undo_xid);
+							   prev_undo_xid,
+							   ZHeapSatisfyUndoRecord);
 
 		/*
 		 * As we still hold a snapshot to which priorXmax is not visible, neither
@@ -6324,7 +6330,8 @@ zheap_fetch_undo_guts(ZHeapTuple ztuple, Buffer buffer, ItemPointer tid)
 	urec = UndoFetchRecord(urec_ptr,
 						   ItemPointerGetBlockNumber(tid),
 						   ItemPointerGetOffsetNumber(tid),
-						   InvalidTransactionId);
+						   InvalidTransactionId,
+						   ZHeapSatisfyUndoRecord);
 
 	/*
 	 * This function is used for trigger to retrieve previous version of the
@@ -7311,4 +7318,45 @@ zheap_mask(char *pagedata, BlockNumber blkno)
 				memset(page_item + len, MASK_MARKER, padlen);
 		}
 	}
+}
+
+/*
+ * Per-undorecord callback from UndoFetchRecord to check whether
+ * an undorecord satisfies the given conditions.
+ */
+bool
+ZHeapSatisfyUndoRecord(UnpackedUndoRecord* urec, BlockNumber blkno,
+								OffsetNumber offset, TransactionId xid)
+{
+	Assert(urec != NULL);
+	Assert(blkno != InvalidBlockNumber);
+
+	if ((urec->uur_block != blkno ||
+		(TransactionIdIsValid(xid) && !TransactionIdEquals(xid, urec->uur_xid))))
+		return false;
+
+	switch (urec->uur_type)
+	{
+		case UNDO_MULTI_INSERT:
+			{
+				OffsetNumber	start_offset;
+				OffsetNumber	end_offset;
+
+				start_offset = ((OffsetNumber *) urec->uur_payload.data)[0];
+				end_offset = ((OffsetNumber *) urec->uur_payload.data)[1];
+
+				if (offset >= start_offset && offset <= end_offset)
+					return true;
+			}
+			break;
+		default:
+			{
+				Assert(offset != InvalidOffsetNumber);
+				if (urec->uur_offset == offset)
+					return true;
+			}
+			break;
+	}
+
+	return false;
 }
