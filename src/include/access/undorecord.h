@@ -151,6 +151,8 @@ typedef struct UndoRecordPayload
  */
 typedef struct UnpackedUndoRecord
 {
+	UndoRecPtr	uur_location;	/* location (once assigned) */
+	int			uur_size;
 	uint8		uur_type;		/* record type code */
 	uint8		uur_info;		/* flag bits */
 	uint16		uur_prevlen;	/* length of previous record */

@@ -19,12 +19,15 @@
 #include "catalog/pg_class.h"
 
 /*
- * Call PrepareUndoInsert to tell the undo subsystem about the undo record you
- * intended to insert.  Upon return, the necessary undo buffers are pinned.
+ * Call PrepareUndoInsert to tell the undo subsystem about the undo records
+ * you intend to insert.  Upon return, the necessary undo buffers are pinned.
  * This should be done before any critical section is established, since it
  * can fail.
  */
-extern UndoRecPtr PrepareUndoInsert(UnpackedUndoRecord *, UndoPersistence, TransactionId);
+extern void PrepareUndoInsert(UnpackedUndoRecord *urec,
+							  int nrecords,
+							  UndoPersistence upersistence,
+							  TransactionId xid);
 
 /*
  * Insert a previously-prepared undo record.  This will lock the buffers
@@ -66,13 +69,6 @@ extern void UndoRecordRelease(UnpackedUndoRecord *urec);
  * Set the value of PrevUndoLen.
  */
 extern void UndoRecordSetPrevUndoLen(uint16 len);
-
-/*
- * Call UndoSetPrepareSize to set the value of how many maximum prepared can
- * be done before inserting the prepared undo.  If size is > MAX_PREPARED_UNDO
- * then it will allocate extra memory to hold the extra prepared undo.
- */
-extern void UndoSetPrepareSize(int max_prepare);
 
 /*
  * return the previous undo record pointer.

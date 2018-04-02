@@ -670,8 +670,8 @@ UndoRecordSetInfo(UnpackedUndoRecord *uur)
 static int
 InsertFindBufferSlot(RelFileNode rnode, BlockNumber blk, UndoPersistence persistence)
 {
-	int 	i;
-	Buffer 	buffer;
+	int	i;
+	Buffer	buffer;
 
 	/* Don't do anything, if we already have a buffer pinned for the block. */
 	for (i = 0; i < buffer_idx; i++)
@@ -704,30 +704,15 @@ InsertFindBufferSlot(RelFileNode rnode, BlockNumber blk, UndoPersistence persist
 }
 
 /*
- * Call UndoSetPrepareSize to set the value of how many maximum prepared can
- * be done before inserting the prepared undo.  If size is > MAX_PREPARED_UNDO
- * then it will allocate extra memory to hold the extra prepared undo.
- */
-void
-UndoSetPrepareSize(int max_prepare)
-{
-	if (max_prepare <= MAX_PREPARED_UNDO)
-		return;
-
-	prepared_undo = palloc0(max_prepare * sizeof(PreparedUndoSpace));
-	undo_buffer = palloc0(max_prepare * MAX_BUFFER_PER_UNDO *
-						 sizeof(UndoBuffers));
-	max_prepare_undo = max_prepare;
-}
-
-/*
- * Call PrepareUndoInsert to tell the undo subsystem about the undo record you
- * intended to insert.  Upon return, the necessary undo buffers are pinned.
+ * Call PrepareUndoInsert to tell the undo subsystem about the undo records
+ * you intend to insert.  Upon return, the necessary undo buffers are pinned.
  * This should be done before any critical section is established, since it
  * can fail.
  */
-UndoRecPtr
-PrepareUndoInsert(UnpackedUndoRecord *urec, UndoPersistence upersistence,
+void
+PrepareUndoInsert(UnpackedUndoRecord *urec,
+				  int nrecords,
+				  UndoPersistence upersistence,
 				  TransactionId xid)
 {
 	UndoLogControl *log;
@@ -740,11 +725,18 @@ PrepareUndoInsert(UnpackedUndoRecord *urec, UndoPersistence upersistence,
 	int				starting_byte;
 	int				index = 0;
 	int				bufidx;
+	int				i;
 	bool			need_start_undo = false;
 
-	/* Already reached maximum prepared limit. */
-	if (prepare_idx == max_prepare_undo)
-		return InvalidUndoRecPtr;
+	Assert(prepare_idx == 0);
+
+	/* Allocate some heap memory if the static buffer will not do. */
+	if (nrecords > MAX_PREPARED_UNDO)
+	{
+		prepared_undo = palloc0(nrecords * sizeof(PreparedUndoSpace));
+		undo_buffer = palloc0(nrecords * MAX_BUFFER_PER_UNDO *
+							  sizeof(UndoBuffers));
+	}
 
 	/*
 	 * If this is the first undo record for this top transaction add the
@@ -789,8 +781,16 @@ PrepareUndoInsert(UnpackedUndoRecord *urec, UndoPersistence upersistence,
 	else
 		urec->uur_next = InvalidUndoRecPtr;
 
-	/* calculate the size of the undo record. */
-	size = UndoRecordExpectedSize(urec);
+	for (i = 1; i < nrecords; ++i)
+		urec[i].uur_next = InvalidUndoRecPtr;
+
+	/* calculate the size of the undo records. */
+	size = 0;
+	for (i = 0; i < nrecords; ++i)
+	{
+		urec[i].uur_size = UndoRecordExpectedSize(&urec[i]);
+		size += urec[i].uur_size;
+	}
 
 	if (InRecovery)
 		urecptr = UndoLogAllocateInRecovery(xid, size, upersistence);
@@ -799,6 +799,13 @@ PrepareUndoInsert(UnpackedUndoRecord *urec, UndoPersistence upersistence,
 
 	log = UndoLogGet(UndoRecPtrGetLogNo(urecptr));
 	Assert(AmAttachedToUndoLog(log) || InRecovery);
+
+	/* assign the location of each record */
+	for (i = 0; i < nrecords; ++i)
+	{
+		urec[i].uur_location = urecptr;
+		urecptr = UndoRecPtrPlusUsableBytes(urecptr, urec[i].uur_size);
+	}
 
 	/*
 	 * If we've rewound all the way back to the start of the transaction by
@@ -824,52 +831,53 @@ PrepareUndoInsert(UnpackedUndoRecord *urec, UndoPersistence upersistence,
 	 */
 	if (need_start_undo && txid != prev_txid[upersistence])
 	{
-		UndoRecordUpdateTransactionInfo(urecptr);
+		UndoRecordUpdateTransactionInfo(urec[0].uur_location);
 
 		/* Remember the current transaction's xid. */
 		prev_txid[upersistence] = txid;
 
 		/* Store the current transaction's start undorecptr in the undo log. */
-		UndoLogSetLastXactStartPoint(urecptr);
+		UndoLogSetLastXactStartPoint(urec[0].uur_location);
 	}
 
-	UndoLogAdvance(urecptr, size, upersistence);
-	cur_blk = UndoRecPtrGetBlockNum(urecptr);
-	UndoRecPtrAssignRelFileNode(rnode, urecptr);
-	starting_byte = UndoRecPtrGetPageOffset(urecptr);
-
-	do
+	for (i = 0; i < nrecords; ++i)
 	{
-		bufidx = InsertFindBufferSlot(rnode, cur_blk, log->meta.persistence);
-		if (cur_size == 0)
-			cur_size = BLCKSZ - starting_byte;
-		else
-			cur_size += BLCKSZ - UndoLogBlockHeaderSize;
+		cur_blk = UndoRecPtrGetBlockNum(urec[i].uur_location);
+		UndoRecPtrAssignRelFileNode(rnode, urec[i].uur_location);
+		starting_byte = UndoRecPtrGetPageOffset(urec[i].uur_location);
+		index = 0;
 
-		/* FIXME: Should we just report error ? */
-		Assert(index < MAX_BUFFER_PER_UNDO);
+		do
+		{
+			bufidx = InsertFindBufferSlot(rnode, cur_blk, log->meta.persistence);
+			if (cur_size == 0)
+				cur_size = BLCKSZ - starting_byte;
+			else
+				cur_size += BLCKSZ - UndoLogBlockHeaderSize;
 
-		/* Keep the track of the buffers we have pinned. */
-		prepared_undo[prepare_idx].undo_buffer_idx[index++] = bufidx;
+			/* FIXME: Should we just report error ? */
+			Assert(index < MAX_BUFFER_PER_UNDO);
 
-		/* Undo record can not fit into this block so go to the next block. */
-		cur_blk++;
-	} while (cur_size < size);
+			/* Keep the track of the buffers we have pinned. */
+			prepared_undo[prepare_idx].undo_buffer_idx[index++] = bufidx;
 
-	/*
-	 * Save referenced of undo record pointer as well as undo record.
-	 * InsertPreparedUndo will use these to insert the prepared record.
-	 */
-	prepared_undo[prepare_idx].urec = urec;
-	prepared_undo[prepare_idx].urp = urecptr;
-	prepare_idx++;
+			/* Undo record can not fit into this block so go to the next block. */
+			cur_blk++;
+		} while (cur_size < urec[i].uur_size);
 
-	return urecptr;
+		/*
+		 * Save referenced of undo record pointer as well as undo record.
+		 * InsertPreparedUndo will use these to insert the prepared record.
+		 */
+		prepared_undo[prepare_idx].urec = &urec[i];
+		prepared_undo[prepare_idx].urp = urec[i].uur_location;
+		prepare_idx++;
+	}
 }
 
 /*
- * Insert a previously-prepared undo record.  This will lock the buffers
- * pinned in the previous step, write the actual undo record into them,
+ * Insert previously-prepared undo records.  This will lock the buffers
+ * pinned in the previous step, write the actual undo records into them,
  * and mark them dirty.  For persistent undo, this step should be performed
  * after entering a critical section; it should never fail.
  */
@@ -887,8 +895,11 @@ InsertPreparedUndo(void)
 	UndoLogOffset offset;
 	UndoLogControl *log;
 	uint16	prev_undolen;
+	size_t	total_size = 0;
 
 	Assert(prepare_idx > 0);
+	log = UndoLogGet(UndoRecPtrGetLogNo(prepared_undo[0].urec->uur_location));
+	Assert(AmAttachedToUndoLog(log) || InRecovery);
 
 	/* Lock all the buffers and mark them dirty. */
 	for (idx = 0; idx < buffer_idx; idx++)
@@ -899,6 +910,7 @@ InsertPreparedUndo(void)
 		uur = prepared_undo[idx].urec;
 		urp = prepared_undo[idx].urp;
 
+		total_size += uur->uur_size;
 		already_written = 0;
 		bufidx = 0;
 		starting_byte = UndoRecPtrGetPageOffset(urp);
@@ -908,8 +920,6 @@ InsertPreparedUndo(void)
 		 * We can read meta.prevlen without locking, because only we can write
 		 * to it.
 		 */
-		log = UndoLogGet(UndoRecPtrGetLogNo(urp));
-		Assert(AmAttachedToUndoLog(log) || InRecovery);
 		prev_undolen = log->meta.prevlen;
 
 		/* store the previous undo record length in the header */
@@ -974,6 +984,11 @@ InsertPreparedUndo(void)
 		 */
 		SetCurrentUndoLocation(urp);
 	}
+
+	/* Advance the undo insertion point past the last record inserted. */
+	UndoLogAdvance(prepared_undo[0].urec->uur_location,
+				   total_size,
+				   log->meta.persistence);
 }
 
 /*

@@ -141,6 +141,26 @@ typedef int UndoLogNumber;
 /* Length of undo checkpoint filename */
 #define UNDO_CHECKPOINT_FILENAME_LENGTH	16
 
+/* What is the offset of the i'th non-header byte? */
+#define UndoLogOffsetFromUsableByteNo(i)								\
+	(((i) / UndoLogUsableBytesPerPage) * BLCKSZ +						\
+	 UndoLogBlockHeaderSize +											\
+	 ((i) % UndoLogUsableBytesPerPage))
+
+/* How many non-header bytes are there before a given offset? */
+#define UndoLogOffsetToUsableByteNo(offset)				\
+	(((offset) % BLCKSZ - UndoLogBlockHeaderSize) +		\
+	 ((offset) / BLCKSZ) * UndoLogUsableBytesPerPage)
+
+/* Add 'n' usable bytes to offset stepping over headers to find new offset. */
+#define UndoLogOffsetPlusUsableBytes(offset, n)							\
+	UndoLogOffsetFromUsableByteNo(UndoLogOffsetToUsableByteNo(offset) + (n))
+
+/* Ad 'n' usable bytes an an UndoRecPtr. */
+#define UndoRecPtrPlusUsableBytes(p, n)									\
+	MakeUndoRecPtr(UndoRecPtrGetLogNo(p),								\
+				   UndoLogOffsetPlusUsableBytes(UndoRecPtrGetOffset(p), (n)))
+
 /*
  * UndoRecPtrIsValid
  *		True iff undoRecPtr is valid.
